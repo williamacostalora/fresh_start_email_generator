@@ -25,9 +25,12 @@ class HybridEmailGenerator:
         self.session.headers.update({"Content-Type": "application/json"})
         
         # AI settings optimized for slow Ollama
-        self.ai_timeout_fast = 15  # Quick timeout for first attempt
-        self.ai_timeout_slow = 60  # Longer timeout for retry
-        self.max_workers = 1  # Single worker to avoid overwhelming slow Ollama
+        self.ai_timeout_fast = 20   # Generous for fast models
+        self.ai_timeout_slow = 45   # Retry timeout
+        self.max_workers = 1        # Keep sequential
+        self.debug_mode = True      # Always debug until working
+        print(f"🤖 AI configured: Fast={self.ai_timeout_fast}s, Slow={self.ai_timeout_slow}s")
+
         
         # Application state
         self.prospects = []
@@ -42,6 +45,116 @@ class HybridEmailGenerator:
         
         self._build_ui()
         self._start_ui_updater()
+    
+    def _parse_ai_response(self, ai_text):
+        """Parse AI response and clean labels"""
+        if hasattr(self, 'debug_mode') and self.debug_mode:
+            print(f"   📝 Raw AI response: {repr(ai_text[:100])}...")
+        
+        opening = benefit = action = ""
+        
+        # Method 1: Try exact format first (OPEN:, BENEFIT:, ACTION:)
+        for line in ai_text.split('\n'):
+            line = line.strip()
+            if line.startswith('OPEN:'):
+                opening = line[5:].strip()  # Remove "OPEN:" label
+            elif line.startswith('BENEFIT:'):
+                benefit = line[7:].strip()  # Remove "BENEFIT:" label
+            elif line.startswith('ACTION:'):
+                action = line[7:].strip()   # Remove "ACTION:" label
+        
+        # Method 2: If exact format failed, try flexible extraction
+        if not all([opening, benefit, action]):
+            if hasattr(self, 'debug_mode') and self.debug_mode:
+                print(f"   🔄 Trying flexible extraction...")
+            
+            # Split into lines and clean up
+            lines = [line.strip() for line in ai_text.split('\n') if line.strip() and len(line.strip()) > 5]
+            
+            # Remove any numbered lines (1., 2., 3.) and labels
+            clean_lines = []
+            for line in lines:
+                # Remove leading numbers, bullets, and labels
+                line = line.strip('123456789.- ')
+                
+                # Remove any remaining labels that might be embedded
+                for label in ['OPEN:', 'BENEFIT:', 'ACTION:']:
+                    if line.startswith(label):
+                        line = line[len(label):].strip()
+                
+                if line and len(line) > 5:
+                    clean_lines.append(line)
+            
+            # Try to assign based on content keywords
+            for line in clean_lines:
+                lower_line = line.lower()
+                
+                # Opening: contains greetings, company name, or hope/hello
+                if not opening and any(word in lower_line for word in ['hope', 'hello', 'greetings', 'hi', 'good', 'team']):
+                    opening = line
+                    continue
+                
+                # Benefit: contains cleaning/business benefits
+                if not benefit and any(word in lower_line for word in ['clean', 'professional', 'productivity', 'maintain', 'environment', 'image', 'standards']):
+                    benefit = line
+                    continue
+                
+                # Action: contains meeting/call requests
+                if not action and any(word in lower_line for word in ['call', 'meeting', 'schedule', 'discuss', 'available', 'talk', 'contact']):
+                    action = line
+                    continue
+            
+            # If still missing pieces, assign by position
+            if not all([opening, benefit, action]) and len(clean_lines) >= 3:
+                if not opening: opening = clean_lines[0]
+                if not benefit: benefit = clean_lines[1] 
+                if not action: action = clean_lines[2]
+        
+        # Method 3: Generate fallbacks for missing pieces
+        if not opening:
+            company_name = getattr(self, '_current_prospect_name', 'your company')
+            opening = f"Hope business is going well at {company_name}"
+        
+        if not benefit:
+            benefit = "Professional cleaning services help maintain business standards and create positive impressions"
+        
+        if not action:
+            action = "Could we schedule a brief call to discuss your cleaning needs"
+        
+        # CRITICAL: Clean up any remaining labels and formatting
+        def clean_text(text):
+            # Remove any remaining labels
+            for label in ['OPEN:', 'BENEFIT:', 'ACTION:', 'open:', 'benefit:', 'action:']:
+                text = text.replace(label, '').strip()
+            
+            # Remove extra quotes, formatting
+            text = text.strip(' "\'.,!?-*')
+            
+            # Ensure proper capitalization
+            if text and not text[0].isupper():
+                text = text[0].upper() + text[1:]
+            
+            return text
+        
+        opening = clean_text(opening)
+        benefit = clean_text(benefit)
+        action = clean_text(action)
+        
+        # Ensure proper punctuation
+        if opening and not opening.endswith(('.', '!', '?')):
+            opening += '.'
+        if benefit and not benefit.endswith(('.', '!', '?')):
+            benefit += '.'
+        if action and not action.endswith(('.', '!', '?')):
+            action += '?'
+        
+        if hasattr(self, 'debug_mode') and self.debug_mode:
+            print(f"   ✅ CLEANED parsing results:")
+            print(f"      OPEN: '{opening}'")
+            print(f"      BENEFIT: '{benefit}'") 
+            print(f"      ACTION: '{action}'")
+        
+        return opening, benefit, action
 
     def _load_config(self):
         try:
@@ -49,6 +162,33 @@ class HybridEmailGenerator:
         except Exception as e:
             messagebox.showerror("Config Error", f"Error loading config: {e}")
             raise
+    def _warmup_model_if_needed(self):
+        """Quick model warmup to avoid slow first request"""
+        try:
+            ollama_config = self.config.get("ollama")
+            warmup_payload = {
+                "model": ollama_config["model"], 
+                "prompt": "ready",
+                "stream": False,
+                "options": {"num_predict": 1}
+            }
+            
+            response = self.session.post(
+                ollama_config["url"],
+                json=warmup_payload, 
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                print("🔥 Model warmed up and ready")
+                return True
+            else:
+                print("⚠️ Model may be cold - first generation will be slower")
+                return False
+        except:
+            print("⚠️ Warmup failed - first generation may be slower")
+            return False
+
 
     def _load_industry_data(self):
         """Industry-specific data for AI customization and fallbacks"""
@@ -610,9 +750,47 @@ Overall Status: {self.config.get_config_status()}
                 prospect.get("Location", "")
             )
             self.prospects_tree.insert("", "end", values=values)
-
+    
+    def _pre_warm_model(self):
+        """Pre-warm model to ensure it stays loaded"""
+        try:
+            ollama_config = self.config.get("ollama")
+            
+            # Send a warming request
+            payload = {
+                "model": ollama_config["model"],
+                "prompt": "Ready for email generation",
+                "stream": False,
+                "options": {
+                    "num_predict": 5,
+                    "temperature": 0.7
+                }
+            }
+            
+            print(f"🔥 Pre-warming {ollama_config['model']}...")
+            start_time = time.time()
+            
+            response = self.session.post(
+                ollama_config["url"],
+                json=payload,
+                timeout=60
+            )
+            
+            duration = time.time() - start_time
+            
+            if response.status_code == 200:
+                print(f"✅ Model warmed in {duration:.1f}s - ready for {len(self.prospects)} emails")
+                return True
+            else:
+                print(f"❌ Warmup failed: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Warmup error: {e}")
+            return False
+      
     def _start_generation(self):
-        """Start hybrid email generation"""
+        """Start generation with model warmup"""
         if not self.prospects:
             messagebox.showwarning("No Data", "Please load a CSV file first.")
             return
@@ -620,21 +798,153 @@ Overall Status: {self.config.get_config_status()}
         if self.is_generating:
             return
         
+        # Warmup AI model FIRST
+        self.status_bar.config(text="🔥 Warming up AI model for ALL emails...")
+        self.root.update()
+        
+        # Pre-warm the model
+        success = self._pre_warm_model()
+        if success:
+            self.status_bar.config(text="✅ AI ready - generating ALL emails with AI...")
+        else:
+            self.status_bar.config(text="⚠️ AI warmup failed - may use some templates...")
+        
+        self.root.update()
+        time.sleep(1)
+        
         self.is_generating = True
         self.cancel_event.clear()
         self.emails = []
         
         # Update UI
-        self.generate_btn.config(state=tk.DISABLED, text="🤖 Generating...")
+        self.generate_btn.config(state=tk.DISABLED, text="🤖 AI Generating...")
         self.cancel_btn.config(state=tk.NORMAL)
         self.progress.config(maximum=len(self.prospects), value=0)
         self.progress_label.config(text="0/0")
-        self.status_bar.config(text="Starting hybrid generation...")
         
         # Start background generation
-        thread = threading.Thread(target=self._generate_worker, daemon=True)
+        thread = threading.Thread(target=self._generate_worker_sequential, daemon=True)
         thread.start()
-
+    
+    def _generate_single_email_with_retry(self, index, prospect):
+        """Generate single email with aggressive AI retry"""
+        start_time = time.time()
+        company_name = prospect.get("Company Name", "Unknown")
+        
+        # Try AI with multiple attempts
+        for attempt in range(3):  # Up to 3 attempts per email
+            try:
+                timeout = self.ai_timeout_fast if attempt == 0 else self.ai_timeout_slow
+                print(f"   🤖 AI attempt {attempt+1} (timeout: {timeout}s)")
+                
+                subject, body = self._try_ai_generation(prospect, timeout)
+                method = "ai_fast" if attempt == 0 else "ai_slow"
+                
+                generation_time = time.time() - start_time
+                print(f"   ✅ AI SUCCESS on attempt {attempt+1} ({generation_time:.1f}s)")
+                
+                return {
+                    "original_index": index,
+                    "prospect": prospect,
+                    "subject": subject,
+                    "body": body,
+                    "method": method,
+                    "generation_time": f"{generation_time:.1f}s",
+                    "generated_at": datetime.now().isoformat(),
+                    "sent": False
+                }
+                
+            except requests.exceptions.Timeout:
+                print(f"   ⏰ AI timeout on attempt {attempt+1}")
+                continue
+            except Exception as e:
+                print(f"   ❌ AI error on attempt {attempt+1}: {e}")
+                continue
+        
+        # If all AI attempts failed, use template
+        print(f"   📝 All AI attempts failed - using template")
+        subject, body = self._generate_fallback_email(prospect)
+        generation_time = time.time() - start_time
+        
+        return {
+            "original_index": index,
+            "prospect": prospect,
+            "subject": subject,
+            "body": body,
+            "method": "fallback",
+            "generation_time": f"{generation_time:.1f}s",
+            "generated_at": datetime.now().isoformat(),
+            "sent": False
+        }
+        
+    def _generate_worker_sequential(self):
+        """Sequential generation to keep model hot"""
+        total = len(self.prospects)
+        ai_success = 0
+        fallback_used = 0
+        failed = 0
+        
+        print(f"\n🚀 SEQUENTIAL AI GENERATION - Target: {total} AI emails")
+        print("=" * 60)
+        
+        for i, prospect in enumerate(self.prospects):
+            if self.cancel_event.is_set():
+                break
+            
+            company_name = prospect.get("Company Name", "Unknown")
+            print(f"\n📧 Email {i+1}/{total}: {company_name}")
+            
+            try:
+                # Generate with debugging
+                email_data = self._generate_single_email_with_retry(i, prospect)
+                self.emails.append(email_data)
+                
+                # Count and report
+                method = email_data["method"]
+                if method in ["ai_fast", "ai_slow"]:
+                    ai_success += 1
+                    print(f"   🎉 AI SUCCESS ({method}) for {company_name}")
+                elif method == "fallback":
+                    fallback_used += 1
+                    print(f"   📝 TEMPLATE used for {company_name}")
+                else:
+                    failed += 1
+                    print(f"   ❌ FAILED for {company_name}")
+                
+                # Update progress
+                current = len(self.emails)
+                self.result_queue.put({
+                    "type": "progress",
+                    "current": current,
+                    "total": total,
+                    "message": f"AI: {ai_success}, Templates: {fallback_used} - {company_name}"
+                })
+                
+                # Keep model warm between requests
+                if i < total - 1:
+                    print(f"   ⏸️ Keeping model warm...")
+                    time.sleep(1)  # Brief pause
+                
+            except Exception as e:
+                print(f"❌ Processing error for {company_name}: {e}")
+                failed += 1
+        
+        print(f"\n🎯 FINAL RESULTS:")
+        print(f"   🤖 AI Generated: {ai_success}/{total}")
+        print(f"   📝 Templates: {fallback_used}/{total}")
+        print(f"   ❌ Failed: {failed}/{total}")
+        
+        # Send completion
+        self.result_queue.put({
+            "type": "generation_complete",
+            "results": {
+                "ai_success": ai_success,
+                "fallback_used": fallback_used,
+                "failed": failed,
+                "total": len(self.emails)
+            }
+        })
+    
     def _cancel_generation(self):
         """Cancel email generation"""
         self.cancel_event.set()
@@ -783,6 +1093,8 @@ ACTION: Could we schedule a brief call about your needs"""
         response.raise_for_status()
         
         ai_text = response.json().get("response", "").strip()
+        if hasattr(self, 'debug_mode') and self.debug_mode:
+            print(f"   📝 Full AI response: {repr(ai_text)}")
         opening, benefit, action = self._parse_ai_response(ai_text)
         
         # Generate email using AI customizations
@@ -791,24 +1103,6 @@ ACTION: Could we schedule a brief call about your needs"""
         
         return subject, body
 
-    def _parse_ai_response(self, ai_text):
-        """Parse AI response into components"""
-        opening = benefit = action = ""
-        
-        for line in ai_text.split('\n'):
-            line = line.strip()
-            if line.startswith('OPEN:'):
-                opening = line[5:].strip()
-            elif line.startswith('BENEFIT:'):
-                benefit = line[7:].strip()
-            elif line.startswith('ACTION:'):
-                action = line[7:].strip()
-        
-        # Fallback if parsing fails
-        if not all([opening, benefit, action]):
-            raise ValueError("AI response incomplete")
-        
-        return opening, benefit, action
 
     def _generate_fallback_email(self, prospect):
         """Generate email using smart templates"""
@@ -1102,6 +1396,7 @@ Fresh Start Cleaning Co.
             self.progress.config(value=0)
             self.progress_label.config(text="")
             self.status_bar.config(text="🚀 Ready for new project")
+    
 
 def main():
     """Main application entry point"""
