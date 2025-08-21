@@ -241,6 +241,30 @@ class HybridEmailGenerator:
                 'fallback_benefit': "Professional cleaning helps maintain your business image and employee satisfaction.",
                 'fallback_action': "Could we schedule a call to discuss your office cleaning needs?"
             },
+            'professional_services': {
+                'services': ['Office cleaning', 'Reception area maintenance', 'Conference room cleaning', 'Professional space upkeep'],
+                'benefits': 'professional environments create positive client impressions and boost productivity',
+                'pain_points': 'maintaining professional appearance for client meetings and staff productivity',
+                'fallback_opening': "Hope business is going well at {company_name}.",
+                'fallback_benefit': "Professional cleaning helps maintain your business image and client impressions.",
+                'fallback_action': "Could we schedule a brief call about your office cleaning needs?"
+            },
+            'food_beverage': {
+                'services': ['Kitchen deep cleaning', 'Dining area maintenance', 'Health code compliance', 'Equipment sanitization'],
+                'benefits': 'spotless facilities are essential for health compliance and customer satisfaction',
+                'pain_points': 'maintaining health department standards while serving customers',
+                'fallback_opening': "Hope your customers are enjoying {company_name}.",
+                'fallback_benefit': "Professional cleaning is essential for health compliance and customer satisfaction.",
+                'fallback_action': "Could we schedule a call to discuss your cleaning needs?"
+            },
+            'retail': {
+                'services': ['Sales floor cleaning', 'Window cleaning', 'Restroom maintenance', 'Storage area organization'],
+                'benefits': 'clean retail spaces create positive shopping experiences and drive sales',
+                'pain_points': 'maintaining appealing spaces while serving customers throughout the day',
+                'fallback_opening': "Hope your customers are having great experiences at {company_name}.",
+                'fallback_benefit': "Clean retail spaces create positive shopping experiences.",
+                'fallback_action': "Could we discuss your store cleaning needs?"
+            },
             'default': {
                 'services': ['Commercial cleaning', 'Professional maintenance', 'Customized solutions', 'Reliable service'],
                 'benefits': 'professional cleaning maintains business standards and creates positive impressions',
@@ -275,7 +299,7 @@ class HybridEmailGenerator:
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="New Project", command=self._new_project)
-        file_menu.add_command(label="Load CSV", command=self._load_csv)
+        file_menu.add_command(label="Load CSV/Excel", command=self._load_csv)
         file_menu.add_command(label="Create Test CSV", command=self._create_test_csv)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit)
@@ -300,7 +324,7 @@ class HybridEmailGenerator:
         file_buttons = ttk.Frame(file_frame)
         file_buttons.pack(fill=tk.X)
         
-        ttk.Button(file_buttons, text="📁 Load CSV", command=self._load_csv).pack(side=tk.LEFT)
+        ttk.Button(file_buttons, text="📁 Load CSV/Excel", command=self._load_csv).pack(side=tk.LEFT)
         ttk.Button(file_buttons, text="⚡ Create Test CSV", command=self._create_test_csv).pack(side=tk.LEFT, padx=(10, 0))
         self.file_status = ttk.Label(file_buttons, text="No file loaded", foreground="gray")
         self.file_status.pack(side=tk.LEFT, padx=(10, 0))
@@ -309,7 +333,7 @@ class HybridEmailGenerator:
         preview_frame = ttk.LabelFrame(self.gen_tab, text="Prospects Preview", padding=10)
         preview_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        columns = ("Company", "Industry", "Contact", "Email", "Location")
+        columns = ("Company", "Category", "City", "Email", "Website")
         self.prospects_tree = ttk.Treeview(preview_frame, columns=columns, show="headings", height=6)
         for col in columns:
             self.prospects_tree.heading(col, text=col)
@@ -343,7 +367,7 @@ class HybridEmailGenerator:
                                    command=self._cancel_generation, state=tk.DISABLED)
         self.cancel_btn.pack(side=tk.LEFT, padx=(10, 0))
         
-        self.gen_status = ttk.Label(controls, text="Load CSV file to begin")
+        self.gen_status = ttk.Label(controls, text="Load CSV/Excel file to begin")
         self.gen_status.pack(side=tk.RIGHT)
         
         # Review section
@@ -407,20 +431,24 @@ Status: {ai_status}
 • Max Workers: {self.max_workers} (prevents overwhelming slow AI)
 • Fallback: Smart industry-specific templates
 
-🏠 Supported Industries:
-• Education (schools, colleges, universities)
-• Construction (commercial, residential projects)
-• Technology (offices, startups, tech companies)
-• Manufacturing (industrial facilities, plants)
-• Residential (homes, apartments, condos)
-• Office (professional services, businesses)
-• Default (all other business types)
+📊 Expected Excel/CSV Fields:
+• Company Name (required)
+• Category (required - business category/industry)
+• City (required - business location)
+• Email (required - contact email)
+• Website (optional - company website)
+
+🏠 Supported Categories:
+• Education, Construction, Technology, Manufacturing
+• Residential, Office, Professional Services
+• Food & Beverage, Retail, and more
+• Auto-detected from category field
 
 🔄 How Hybrid Mode Works:
 1. Try AI generation with {self.ai_timeout_fast}s timeout
 2. If AI times out → Use smart template fallback
 3. If AI fails → Retry once with {self.ai_timeout_slow}s timeout
-4. If still fails → Use template with industry customization
+4. If still fails → Use template with category customization
 
 💡 This ensures you always get emails, even if AI is slow!
 
@@ -495,109 +523,74 @@ Overall Status: {self.config.get_config_status()}
             return f"❌ Not available ({str(e)[:30]}...)"
 
     def _load_csv(self):
-        """Load prospects from CSV file with flexible field handling"""
+        """Load prospects from CSV/Excel file with your specific field structure"""
         file_path = filedialog.askopenfilename(
-            title="Select Prospects CSV",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+            title="Select Prospects File",
+            filetypes=[
+                ("Excel files", "*.xlsx *.xls"),
+                ("CSV files", "*.csv"), 
+                ("All files", "*.*")
+            ]
         )
         
         if not file_path:
             return
         
         try:
-            df = pd.read_csv(file_path)
+            # Load file based on extension
+            if file_path.lower().endswith(('.xlsx', '.xls')):
+                df = pd.read_excel(file_path)
+            else:
+                df = pd.read_csv(file_path)
             
-            # Check for required columns (more flexible)
-            required = ["Company Name"]
-            if "Company Name" not in df.columns:
-                # Try common variations
-                company_cols = [col for col in df.columns if any(word in col.lower() for word in ['company', 'business', 'name'])]
-                if company_cols:
-                    df = df.rename(columns={company_cols[0]: "Company Name"})
-                else:
-                    messagebox.showerror("Invalid CSV", "Need at least a company name column")
-                    return
+            # Validate required fields
+            required_fields = ["Company Name", "Category", "City", "Email"]
+            missing_fields = [field for field in required_fields if field not in df.columns]
             
-            # Handle missing Email column
-            if "Email" not in df.columns:
-                # Create placeholder emails that can be filled later
-                df["Email"] = df["Company Name"].apply(lambda x: f"contact@{x.lower().replace(' ', '').replace('&', 'and')}.com")
-                messagebox.showinfo("Email Column Missing", 
-                                  "No email column found. Generated placeholder emails.\n" +
-                                  "You can edit these in the generated emails or find real contacts later.")
+            if missing_fields:
+                messagebox.showerror(
+                    "Missing Required Fields", 
+                    f"Your file is missing these required columns:\n{', '.join(missing_fields)}\n\n"
+                    f"Expected columns: Company Name, Category, City, Email, Website (optional)"
+                )
+                return
             
-            # Handle missing Contact Name
-            if "Contact Name" not in df.columns:
-                df["Contact Name"] = "Manager"  # Default contact name
+            # Handle optional Website field
+            if "Website" not in df.columns:
+                df["Website"] = ""
+                print("📝 Website column not found - added empty Website field")
             
-            # Handle missing Industry - try to infer or set default
-            if "Industry" not in df.columns:
-                # Try to infer from company name or other fields
-                def infer_industry(row):
-                    company = str(row.get("Company Name", "")).lower()
-                    if any(word in company for word in ['plumbing', 'hvac', 'ac', 'contractor']):
-                        return 'Construction'
-                    elif any(word in company for word in ['technology', 'tech', 'it', 'computer']):
-                        return 'Technology'
-                    elif any(word in company for word in ['consulting', 'consultant']):
-                        return 'Professional Services'
-                    elif any(word in company for word in ['security', 'exterminating', 'pest']):
-                        return 'Services'
-                    elif any(word in company for word in ['coffee', 'cafe', 'restaurant']):
-                        return 'Food & Beverage'
-                    elif any(word in company for word in ['coworking', 'workspace', 'office']):
-                        return 'Office'
-                    else:
-                        return 'Business'
-                
-                df["Industry"] = df.apply(infer_industry, axis=1)
+            # Clean and validate data
+            # Remove rows with empty company names
+            df = df[df["Company Name"].str.strip().astype(bool)]
             
-            # Handle missing Location - try to use City or set default
-            if "Location" not in df.columns:
-                if "City" in df.columns:
-                    df["Location"] = df["City"] + ", LA"
-                else:
-                    df["Location"] = "Louisiana"
+            # Remove rows with empty emails
+            df = df[df["Email"].str.strip().astype(bool)]
             
-            # Handle missing Company Size
-            if "Company Size" not in df.columns:
-                df["Company Size"] = "Small Business"
-            
-            # Handle missing Notes
-            if "Notes" not in df.columns:
-                df["Notes"] = ""
-            
-            # Fill any NaN values
+            # Fill NaN values
             df = df.fillna("")
             
-            # Remove rows with empty company names
-            df = df[df["Company Name"].str.strip() != ""]
-            
+            # Store as records
             self.prospects = df.to_dict("records")
             
-            # Show what was loaded
-            missing_fields = []
-            if "Email" not in df.columns or df["Email"].str.contains("@").sum() == 0:
-                missing_fields.append("emails (generated placeholders)")
-            if "Contact Name" not in df.columns:
-                missing_fields.append("contact names (using 'Manager')")
-            if "Industry" not in df.columns:
-                missing_fields.append("industries (auto-detected)")
-            
-            status_text = f"✅ Loaded {len(self.prospects)} prospects"
-            if missing_fields:
-                status_text += f"\n📝 Auto-filled: {', '.join(missing_fields)}"
-            
-            self.file_status.config(text=status_text, foreground="green")
+            # Success message
+            self.file_status.config(
+                text=f"✅ Loaded {len(self.prospects)} prospects\n📊 Fields: {', '.join(df.columns)}", 
+                foreground="green"
+            )
             self._refresh_prospects_tree()
             self.generate_btn.config(state=tk.NORMAL)
             self.gen_status.config(text="Ready to generate hybrid emails")
             
+            print(f"📂 Successfully loaded {len(self.prospects)} prospects from {file_path}")
+            print(f"📊 Columns found: {list(df.columns)}")
+            
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load CSV: {e}")
+            messagebox.showerror("File Load Error", f"Failed to load file: {str(e)}")
+            print(f"❌ Error loading file: {e}")
 
     def _create_test_csv(self):
-        """Create test CSV with some missing fields to demonstrate flexibility"""
+        """Create test CSV with your exact field structure"""
         test_data = {
             "Company Name": [
                 "A5 Star Plumbing Company",
@@ -605,15 +598,15 @@ Overall Status: {self.config.get_config_status()}
                 "DDG Architectural Design",
                 "Techneaux Technology Services",
                 "Rêve Coffee Roasters",
-                "Smith Family Home"
+                "Fresh Market Solutions"
             ],
-            "Industry": [
-                "Plumbing / Contractors",
-                "Security Services", 
-                "Architectural Design",
-                "",  # Missing industry
+            "Category": [
+                "Construction",
+                "Professional Services", 
+                "Professional Services",
+                "Technology",
                 "Food & Beverage",
-                "Residential"
+                "Retail"
             ],
             "City": [
                 "Youngsville",
@@ -623,118 +616,45 @@ Overall Status: {self.config.get_config_status()}
                 "Lafayette",
                 "Youngsville"
             ],
-            "Phone": [
-                "(337) 202-0246",
-                "(337) 839-1880",
-                "(337) 233-9914",
-                "(800) 337-5313",
-                "(337) 534-8336",
-                "(337) 555-0123"
+            "Email": [
+                "info@a5starplumbing.com",
+                "contact@acadianasecurity.com",
+                "hello@ddgarchitectural.com",
+                "support@techneaux.com",
+                "info@revecoffee.com",
+                "contact@freshmarketsolutions.com"
             ],
-            # Note: No Email column to test auto-generation
-            # Note: No Contact Name column to test defaults
-            # Note: No Company Size column to test defaults
+            "Website": [
+                "www.a5starplumbing.com",
+                "www.acadianasecurity.com",
+                "www.ddgarchitectural.com",
+                "www.techneaux.com",
+                "www.revecoffee.com",
+                ""  # Test empty website
+            ]
         }
         
         df = pd.DataFrame(test_data)
-        file_path = "test_prospects_flexible.csv"
+        file_path = "test_prospects.csv"
         df.to_csv(file_path, index=False)
         
-        self.prospects = self._process_flexible_csv(df)
-        self.file_status.config(text=f"✅ Created & loaded {len(self.prospects)} test prospects\n📝 Demonstrates missing field handling", foreground="green")
+        # Load the test data
+        self.prospects = df.to_dict("records")
+        self.file_status.config(
+            text=f"✅ Created & loaded {len(self.prospects)} test prospects\n📊 Perfect field structure", 
+            foreground="green"
+        )
         self._refresh_prospects_tree()
         self.generate_btn.config(state=tk.NORMAL)
         self.gen_status.config(text="Ready to generate hybrid emails")
         
-        messagebox.showinfo("Flexible Test CSV Created", 
-                          f"Created {file_path} with missing fields to demonstrate flexibility!\n\n" +
-                          "✅ Company names provided\n" +
-                          "❌ Email column missing (auto-generated)\n" +
-                          "❌ Contact names missing (using 'Manager')\n" +
-                          "❌ Company size missing (using 'Small Business')\n" +
-                          "✅ Industries mostly provided (auto-detected where missing)")
-
-    def _process_flexible_csv(self, df):
-        """Process CSV with missing fields"""
-        # Handle missing Email column
-        if "Email" not in df.columns:
-            df["Email"] = df["Company Name"].apply(self._generate_placeholder_email)
-        
-        # Handle missing Contact Name
-        if "Contact Name" not in df.columns:
-            df["Contact Name"] = "Manager"
-        
-        # Handle missing Industry
-        if "Industry" not in df.columns or df["Industry"].isna().any():
-            df["Industry"] = df.apply(self._infer_industry, axis=1)
-        
-        # Handle missing Location
-        if "Location" not in df.columns:
-            if "City" in df.columns:
-                df["Location"] = df["City"].apply(lambda x: f"{x}, LA" if x else "Louisiana")
-            else:
-                df["Location"] = "Louisiana"
-        
-        # Handle missing Company Size
-        if "Company Size" not in df.columns:
-            df["Company Size"] = "Small Business"
-        
-        # Handle missing Notes
-        if "Notes" not in df.columns:
-            df["Notes"] = ""
-        
-        # Fill NaN values
-        df = df.fillna("")
-        
-        return df.to_dict("records")
-
-    def _generate_placeholder_email(self, company_name):
-        """Generate placeholder email from company name"""
-        if not company_name:
-            return "contact@company.com"
-        
-        # Clean up company name for email
-        clean_name = company_name.lower()
-        clean_name = clean_name.replace(' & ', 'and')
-        clean_name = clean_name.replace('&', 'and')
-        clean_name = ''.join(c for c in clean_name if c.isalnum())
-        
-        # Truncate if too long
-        if len(clean_name) > 20:
-            clean_name = clean_name[:20]
-        
-        return f"contact@{clean_name}.com"
-
-    def _infer_industry(self, row):
-        """Infer industry from company name and other fields"""
-        company = str(row.get("Company Name", "")).lower()
-        existing_industry = str(row.get("Industry", "")).strip()
-        
-        # If industry already provided and not empty, use it
-        if existing_industry and existing_industry.lower() not in ['', 'nan', 'null']:
-            return existing_industry
-        
-        # Infer from company name
-        if any(word in company for word in ['plumbing', 'hvac', 'ac', 'contractor', 'construction']):
-            return 'Construction'
-        elif any(word in company for word in ['technology', 'tech', 'it', 'computer', 'software']):
-            return 'Technology'
-        elif any(word in company for word in ['consulting', 'consultant', 'advisory']):
-            return 'Professional Services'
-        elif any(word in company for word in ['security', 'exterminating', 'pest', 'cleaning']):
-            return 'Services'
-        elif any(word in company for word in ['coffee', 'cafe', 'restaurant', 'food', 'roaster']):
-            return 'Food & Beverage'
-        elif any(word in company for word in ['coworking', 'workspace', 'office', 'regus']):
-            return 'Office'
-        elif any(word in company for word in ['marketing', 'advertising', 'agency']):
-            return 'Marketing'
-        elif any(word in company for word in ['insurance', 'financial', 'trust']):
-            return 'Financial Services'
-        elif any(word in company for word in ['engineering', 'engineer', 'design']):
-            return 'Engineering'
-        else:
-            return 'Business'
+        messagebox.showinfo(
+            "Test CSV Created", 
+            f"Created {file_path} with your exact field structure!\n\n" +
+            "✅ Company Name, Category, City, Email, Website\n" +
+            "✅ Includes various business categories\n" +
+            "✅ Ready for email generation testing"
+        )
 
     def _refresh_prospects_tree(self):
         """Refresh the prospects tree view"""
@@ -743,11 +663,11 @@ Overall Status: {self.config.get_config_status()}
         
         for prospect in self.prospects:
             values = (
-                prospect.get("Company Name", ""),
-                prospect.get("Industry", ""),
-                prospect.get("Contact Name", ""),
-                prospect.get("Email", ""),
-                prospect.get("Location", "")
+                prospect.get("Company Name", "")[:30],
+                prospect.get("Category", "")[:20],
+                prospect.get("City", "")[:15],
+                prospect.get("Email", "")[:30],
+                prospect.get("Website", "")[:30]
             )
             self.prospects_tree.insert("", "end", values=values)
     
@@ -792,7 +712,7 @@ Overall Status: {self.config.get_config_status()}
     def _start_generation(self):
         """Start generation with model warmup"""
         if not self.prospects:
-            messagebox.showwarning("No Data", "Please load a CSV file first.")
+            messagebox.showwarning("No Data", "Please load a CSV/Excel file first.")
             return
         
         if self.is_generating:
@@ -1049,27 +969,31 @@ Overall Status: {self.config.get_config_status()}
     def _try_ai_generation(self, prospect, timeout):
         """Try AI generation with specified timeout"""
         company_name = prospect.get("Company Name", "Your Company")
-        industry = prospect.get("Industry", "business").lower()
-        contact_name = prospect.get("Contact Name", "Manager")
+        category = prospect.get("Category", "business").lower()
+        city = prospect.get("City", "Louisiana")
+        website = prospect.get("Website", "")
         
         # Get industry data for context
-        industry_key = self._map_industry(industry)
+        industry_key = self._map_category_to_industry(category)
         industry_info = self.industry_data[industry_key]
         
-        # Create focused prompt for AI
-        prompt = f"""Write 3 short customized lines for {company_name} ({industry}):
+        # Create focused prompt for AI with all available data
+        website_context = f"I noticed their website is {website} - " if website else ""
+        
+        prompt = f"""Write 3 short customized lines for {company_name} ({category}) in {city}:
 
-1. Personal opening line mentioning {company_name} (max 12 words)
-2. Industry-specific benefit about why {industry_info['benefits']} (max 15 words)  
-3. Call to action for meeting (max 10 words)
+1. Professional opening email line (max 12 words This is the first time Fresh Start Cleaning Louisiana,LLC reach out to the company and this is an opening email) 
+2. Professional Industry-specific benefits {industry_info['benefits']} (max 15 words how Fresh Start Cleaning is useful to their business)  
+3. Professional Call to action to schedule a call or zoom meeting(max 10 words)
 
 Company: {company_name}
-Industry: {industry}
-Contact: {contact_name}
+Category: {category}
+City: {city}
+{f"Website: {website}" if website else ""}
 
 Format exactly (no colons in the content):
 OPEN: [opening line]
-BENEFIT: [why cleaning matters for this industry]
+BENEFIT: [why cleaning matters for this category]
 ACTION: [meeting request]
 
 Example:
@@ -1107,10 +1031,10 @@ ACTION: Could we schedule a brief call about your needs"""
     def _generate_fallback_email(self, prospect):
         """Generate email using smart templates"""
         company_name = prospect.get("Company Name", "Your Company")
-        industry = prospect.get("Industry", "business").lower()
+        category = prospect.get("Category", "business").lower()
         
         # Get industry-specific template
-        industry_key = self._map_industry(industry)
+        industry_key = self._map_category_to_industry(category)
         industry_info = self.industry_data[industry_key]
         
         # Use fallback content
@@ -1126,7 +1050,8 @@ ACTION: Could we schedule a brief call about your needs"""
     def _build_email_body(self, prospect, industry_info, opening, benefit, action):
         """Build email body using customizations and industry data"""
         company_name = prospect.get("Company Name", "Your Company")
-        contact_name = prospect.get("Contact Name", "Manager")
+        city = prospect.get("City", "Louisiana")
+        website = prospect.get("Website", "")
         company_config = self.config.get_company_info()
         
         # Build service list
@@ -1148,42 +1073,52 @@ ACTION: Could we schedule a brief call about your needs"""
         if benefit_clean and not benefit_clean.endswith('.'):
             benefit_clean += '.'
 
-        body = f"""Dear {contact_name},
+        # Build location context
+        location_context = f"We're based locally and serve businesses throughout {city} and the surrounding Louisiana area."
+        
+        # Build website reference if available
+        # website_reference = f"I had a chance to look at {website} and " if website else ""
+
+        body = f"""Dear {company_name},
 
 {opening}
 
-Fresh Start Cleaning Co. specializes in professional cleaning for businesses like {company_name}. {benefit_clean}
+Fresh Start Cleaning Louisiana, LLC. specializes in professional cleaning for businesses like {company_name}. {benefit_clean}
 
 Our services include:
 {service_list}
 
-With over 10+ years of experience serving Louisiana businesses, we're Licensed, Bonded, and Insured. Our local team provides reliable, professional service tailored to your specific needs.
+{location_context} With over 5+ years of experience serving Louisiana businesses, we're licensed, bonded, and insured. Our local team provides reliable, professional service tailored to your specific needs.
 
 {action}
 
 Best regards,
-Fresh Start Cleaning Co.
+Fresh Start Cleaning Louisiana, LLC.
 {company_config.get('phone', '')}
 {company_config.get('website', '')}"""
 
         return body
 
-    def _map_industry(self, industry):
-        """Map industry string to category"""
-        industry = industry.lower()
+    def _map_category_to_industry(self, category):
+        """Map category string to industry category"""
+        category = category.lower()
         
-        if any(word in industry for word in ['education', 'school', 'college', 'university', 'campus']):
+        if any(word in category for word in ['education', 'preschool', 'school', 'academy', 'college', 'university', 'campus', 'steam']):
             return 'education'
-        elif any(word in industry for word in ['construction', 'building', 'contractor', 'builder']):
+        elif any(word in category for word in ['construction', 'building', 'contractor', 'builder', 'plumbing', 'hvac', 'realty']):
             return 'construction'
-        elif any(word in industry for word in ['technology', 'tech', 'software', 'it', 'startup']):
+        elif any(word in category for word in ['technology', 'tech', 'software', 'it', 'startup', 'computer']):
             return 'technology'
-        elif any(word in industry for word in ['manufacturing', 'industrial', 'factory', 'plant']):
+        elif any(word in category for word in ['manufacturing', 'industrial', 'factory', 'plant']):
             return 'manufacturing'
-        elif any(word in industry for word in ['residential', 'home', 'house', 'apartment', 'family']):
+        elif any(word in category for word in ['residential', 'home', 'house', 'apartment', 'family']):
             return 'residential'
-        elif any(word in industry for word in ['office', 'professional', 'services', 'business']):
-            return 'office'
+        elif any(word in category for word in ['office', 'professional services', 'consulting', 'consultant']):
+            return 'professional_services'
+        elif any(word in category for word in ['food', 'beverage', 'restaurant', 'cafe', 'coffee', 'roaster']):
+            return 'food_beverage'
+        elif any(word in category for word in ['retail', 'store', 'shop', 'market']):
+            return 'retail'
         else:
             return 'default'
 
@@ -1389,7 +1324,7 @@ Fresh Start Cleaning Co.
             self.file_status.config(text="No file loaded", foreground="gray")
             self.generate_btn.config(state=tk.DISABLED, text="🚀 Generate Hybrid Emails")
             self.cancel_btn.config(state=tk.DISABLED)
-            self.gen_status.config(text="Load CSV file to begin")
+            self.gen_status.config(text="Load CSV/Excel file to begin")
             self.email_counter.config(text="No emails generated")
             self.subject_entry.delete(0, tk.END)
             self.email_text.delete(1.0, tk.END)
